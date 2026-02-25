@@ -41,9 +41,12 @@ function isStudent(email: string | null | undefined) {
   return emailDomain(email) === "@islstudent.ch";
 }
 
+
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [role, setRole] = useState<"teacher" | "student" | "unknown">("unknown");
+  const [expandedNotes, setExpandedNotes] = useState<Record<string, boolean>>({});
 
   const [teachersOnline, setTeachersOnline] = useState<Record<string, TeacherOnline>>({});
   const [selectedTeacherUid, setSelectedTeacherUid] = useState<string>("");
@@ -164,6 +167,10 @@ export default function App() {
     await signInWithPopup(auth, provider);
   }
 
+  function toggleNote(studentUid: string) {
+  setExpandedNotes((prev) => ({ ...prev, [studentUid]: !prev[studentUid] }));
+}
+
   async function handleSignOut() {
     if (!user) return;
 
@@ -217,6 +224,17 @@ export default function App() {
     return "Red (urgent help)";
   }
 
+  function statusRank(s: "green" | "amber" | "red") {
+    return s === "red" ? 0 : s === "amber" ? 1 : 2;
+  }
+
+  function statusStyles(s: "green" | "amber" | "red") {
+    // Light backgrounds + coloured left border (readable, not aggressive)
+    if (s === "red") return { background: "#fff5f5", borderLeft: "10px solid #dc2626" };
+    if (s === "amber") return { background: "#fffbeb", borderLeft: "10px solid #f59e0b" };
+    return { background: "#f0fdf4", borderLeft: "10px solid #16a34a" };
+  }
+
   // Signed out view
   if (!user) {
     return (
@@ -249,12 +267,16 @@ export default function App() {
   if (role === "teacher") {
     const entries = Object.entries(teacherRequests);
 
-    // Sort: red first, amber second, green last, then name
-    const rank = (s: string) => (s === "red" ? 0 : s === "amber" ? 1 : 2);
+    // Sort: red first, amber second, green last; within each, oldest request first (smallest updatedAt)
     entries.sort((a, b) => {
-      const ra = rank(a[1].status);
-      const rb = rank(b[1].status);
+      const ra = statusRank(a[1].status);
+      const rb = statusRank(b[1].status);
       if (ra !== rb) return ra - rb;
+
+      const ta = a[1].updatedAt ?? 0;
+      const tb = b[1].updatedAt ?? 0;
+      if (ta !== tb) return ta - tb; // older (waiting longer) first
+
       return a[1].studentName.localeCompare(b[1].studentName);
     });
 
@@ -278,22 +300,33 @@ export default function App() {
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
             {entries.map(([studentUid, r]) => (
-              <div
-                key={studentUid}
-                style={{
-                  border: "1px solid #ddd",
-                  borderRadius: 10,
-                  padding: 12,
-                }}
-              >
+                <div
+                  key={studentUid}
+                  onClick={() => toggleNote(studentUid)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") toggleNote(studentUid);
+                  }}
+                  style={{
+                    border: "1px solid #ddd",
+                    borderRadius: 10,
+                    cursor: "pointer",
+                    padding: 12,
+                    ...statusStyles(r.status),
+                  }}
+                >
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
                   <div>
                     <div style={{ fontSize: 18, fontWeight: 600 }}>{r.studentName}</div>
                     <div style={{ opacity: 0.8 }}>{r.studentEmail}</div>
                   </div>
                   <div style={{ fontWeight: 700 }}>{statusLabel(r.status)}</div>
+                  <div style={{ marginTop: 6, opacity: 0.7, fontSize: 12 }}>
+                    Click to {expandedNotes[studentUid] ? "hide" : "view"} note
+                  </div>
                 </div>
-                {r.note ? (
+                {expandedNotes[studentUid] && r.note ? (
                   <div style={{ marginTop: 8 }}>
                     <strong>Note:</strong> {r.note}
                   </div>
