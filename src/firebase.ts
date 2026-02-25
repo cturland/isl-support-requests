@@ -5,6 +5,7 @@ import { getDatabase } from "firebase/database";
 const firebaseConfig = {
   apiKey: "AIzaSyBfHhz2suageQM40gs1Ts9e_bCmVrJ7WxM",
   authDomain: "isl-support-requests.firebaseapp.com",
+  databaseURL: "https://isl-support-requests-default-rtdb.europe-west1.firebasedatabase.app",
   projectId: "isl-support-requests",
   storageBucket: "isl-support-requests.firebasestorage.app",
   messagingSenderId: "133399608135",
