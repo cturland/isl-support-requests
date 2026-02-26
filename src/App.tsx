@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 
 import { auth, db } from "./firebase";
@@ -24,7 +24,8 @@ type StudentRequest = {
   studentEmail: string;
   status: "green" | "amber" | "red";
   note?: string;
-  updatedAt: number;
+  statusUpdatedAt: number;
+  noteUpdatedAt?: number;
 };
 
 function emailDomain(email: string | null | undefined) {
@@ -41,8 +42,6 @@ function isStudent(email: string | null | undefined) {
   return emailDomain(email) === "@islstudent.ch";
 }
 
-
-
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [role, setRole] = useState<"teacher" | "student" | "unknown">("unknown");
@@ -57,6 +56,41 @@ export default function App() {
   const [teacherRequests, setTeacherRequests] = useState<Record<string, StudentRequest>>({});
 
   const provider = useMemo(() => new GoogleAuthProvider(), []);
+
+  // Teacher sound toggle (persisted)
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
+    return localStorage.getItem("soundEnabled") === "true";
+  });
+
+  useEffect(() => {
+    localStorage.setItem("soundEnabled", String(soundEnabled));
+  }, [soundEnabled]);
+
+  const prevTeacherRequestsRef = useRef<Record<string, StudentRequest>>({});
+
+  function playSoftBeep() {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = "sine";
+      osc.frequency.value = 880;
+      gain.gain.value = 0.02;
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start();
+      window.setTimeout(() => {
+        osc.stop();
+        ctx.close();
+      }, 160);
+    } catch {
+      // ignore
+    }
+  }
 
   // Track auth state and derive role from email domain
   useEffect(() => {
@@ -121,17 +155,31 @@ export default function App() {
     });
   }, [role, user]);
 
-  // Teachers watch their own request list
+  // Teachers watch their own request list (with urgent beep detection)
   useEffect(() => {
     if (!user) return;
     if (role !== "teacher") return;
 
     const teacherUid = user.uid;
     const reqRef = ref(db, `teacherRequests/${teacherUid}`);
+
     return onValue(reqRef, (snap) => {
-      setTeacherRequests((snap.val() as Record<string, StudentRequest>) ?? {});
+      const next = (snap.val() as Record<string, StudentRequest>) ?? {};
+
+      if (soundEnabled) {
+        for (const [uid, req] of Object.entries(next)) {
+          const prev = prevTeacherRequestsRef.current[uid];
+          if (req?.status === "red" && prev?.status !== "red") {
+            playSoftBeep();
+            break;
+          }
+        }
+      }
+
+      prevTeacherRequestsRef.current = next;
+      setTeacherRequests(next);
     });
-  }, [role, user]);
+  }, [role, user, soundEnabled]);
 
   // Student selects a teacher => create/update their request node under that teacher
   useEffect(() => {
@@ -142,13 +190,16 @@ export default function App() {
     const studentUid = user.uid;
     const studentReqRef = ref(db, `teacherRequests/${selectedTeacherUid}/${studentUid}`);
 
+    const now = Date.now();
+
     // Default: green
     void set(studentReqRef, {
       studentName: user.displayName ?? "Student",
       studentEmail: user.email ?? "",
       status: "green",
       note: "",
-      updatedAt: Date.now(),
+      statusUpdatedAt: now,
+      noteUpdatedAt: now,
     });
 
     // Remove automatically if student disconnects
@@ -168,8 +219,8 @@ export default function App() {
   }
 
   function toggleNote(studentUid: string) {
-  setExpandedNotes((prev) => ({ ...prev, [studentUid]: !prev[studentUid] }));
-}
+    setExpandedNotes((prev) => ({ ...prev, [studentUid]: !prev[studentUid] }));
+  }
 
   async function handleSignOut() {
     if (!user) return;
@@ -198,9 +249,10 @@ export default function App() {
 
     const studentReqRef = ref(db, `teacherRequests/${selectedTeacherUid}/${user.uid}`);
     await update(studentReqRef, {
+      studentName: user.displayName ?? "Student",
+      studentEmail: user.email ?? "",
       status: newStatus,
-      note,
-      updatedAt: Date.now(),
+      statusUpdatedAt: Date.now(),
     });
   }
 
@@ -213,8 +265,10 @@ export default function App() {
 
     const studentReqRef = ref(db, `teacherRequests/${selectedTeacherUid}/${user.uid}`);
     await update(studentReqRef, {
+      studentName: user.displayName ?? "Student",
+      studentEmail: user.email ?? "",
       note: newNote,
-      updatedAt: Date.now(),
+      noteUpdatedAt: Date.now(),
     });
   }
 
@@ -229,7 +283,6 @@ export default function App() {
   }
 
   function statusStyles(s: "green" | "amber" | "red") {
-    // Light backgrounds + coloured left border (readable, not aggressive)
     if (s === "red") return { background: "#fff5f5", borderLeft: "10px solid #dc2626" };
     if (s === "amber") return { background: "#fffbeb", borderLeft: "10px solid #f59e0b" };
     return { background: "#f0fdf4", borderLeft: "10px solid #16a34a" };
@@ -267,17 +320,17 @@ export default function App() {
   if (role === "teacher") {
     const entries = Object.entries(teacherRequests);
 
-    // Sort: red first, amber second, green last; within each, oldest request first (smallest updatedAt)
+    // Sort: red first, amber second, green last; within each, oldest statusUpdatedAt first
     entries.sort((a, b) => {
       const ra = statusRank(a[1].status);
       const rb = statusRank(b[1].status);
       if (ra !== rb) return ra - rb;
 
-      const ta = a[1].updatedAt ?? 0;
-      const tb = b[1].updatedAt ?? 0;
-      if (ta !== tb) return ta - tb; // older (waiting longer) first
+      const ta = a[1].statusUpdatedAt ?? 0;
+      const tb = b[1].statusUpdatedAt ?? 0;
+      if (ta !== tb) return ta - tb;
 
-      return a[1].studentName.localeCompare(b[1].studentName);
+      return (a[1].studentName ?? "").localeCompare(b[1].studentName ?? "");
     });
 
     return (
@@ -287,6 +340,16 @@ export default function App() {
             <h2>Teacher Dashboard</h2>
             <div>
               Signed in as <strong>{user.displayName}</strong> ({user.email})
+            </div>
+            <div style={{ marginTop: 10 }}>
+              <label style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+                <input
+                  type="checkbox"
+                  checked={soundEnabled}
+                  onChange={(e) => setSoundEnabled(e.target.checked)}
+                />
+                Sound alert for urgent (red)
+              </label>
             </div>
           </div>
           <button onClick={handleSignOut}>Sign out (clears all requests)</button>
@@ -300,26 +363,26 @@ export default function App() {
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
             {entries.map(([studentUid, r]) => (
-                <div
-                  key={studentUid}
-                  onClick={() => toggleNote(studentUid)}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") toggleNote(studentUid);
-                  }}
-                  style={{
-                    border: "1px solid #ddd",
-                    borderRadius: 10,
-                    cursor: "pointer",
-                    padding: 12,
-                    ...statusStyles(r.status),
-                  }}
-                >
+              <div
+                key={studentUid}
+                onClick={() => toggleNote(studentUid)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") toggleNote(studentUid);
+                }}
+                style={{
+                  border: "1px solid #ddd",
+                  borderRadius: 10,
+                  cursor: "pointer",
+                  padding: 12,
+                  ...statusStyles(r.status),
+                }}
+              >
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
                   <div>
-                    <div style={{ fontSize: 18, fontWeight: 600 }}>{r.studentName}</div>
-                    <div style={{ opacity: 0.8 }}>{r.studentEmail}</div>
+                    <div style={{ fontSize: 18, fontWeight: 600 }}>{r.studentName || "Unnamed student"}</div>
+                    <div style={{ opacity: 0.8 }}>{r.studentEmail || "No email available"}</div>
                   </div>
                   <div style={{ fontWeight: 700 }}>{statusLabel(r.status)}</div>
                   <div style={{ marginTop: 6, opacity: 0.7, fontSize: 12 }}>
@@ -332,7 +395,7 @@ export default function App() {
                   </div>
                 ) : null}
                 <div style={{ marginTop: 8, opacity: 0.7, fontSize: 12 }}>
-                  Updated: {new Date(r.updatedAt).toLocaleTimeString()}
+                  Updated: {new Date(r.statusUpdatedAt).toLocaleTimeString()}
                 </div>
               </div>
             ))}
