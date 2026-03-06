@@ -320,21 +320,65 @@ export default function App() {
   if (role === "teacher") {
     const entries = Object.entries(teacherRequests);
 
-    // Sort: red first, amber second, green last; within each, oldest statusUpdatedAt first
-    entries.sort((a, b) => {
-      const ra = statusRank(a[1].status);
-      const rb = statusRank(b[1].status);
-      if (ra !== rb) return ra - rb;
+    // Group students by status
+    const redStudents = entries.filter(([_, r]) => r.status === "red");
+    const amberStudents = entries.filter(([_, r]) => r.status === "amber");
+    const greenStudents = entries.filter(([_, r]) => r.status === "green");
 
+    // Sort each group by statusUpdatedAt (oldest first, most recent at bottom)
+    const sortByTime = (a: [string, StudentRequest], b: [string, StudentRequest]) => {
       const ta = a[1].statusUpdatedAt ?? 0;
       const tb = b[1].statusUpdatedAt ?? 0;
-      if (ta !== tb) return ta - tb;
+      return ta - tb;
+    };
 
-      return (a[1].studentName ?? "").localeCompare(b[1].studentName ?? "");
-    });
+    redStudents.sort(sortByTime);
+    amberStudents.sort(sortByTime);
+    greenStudents.sort(sortByTime);
+
+    const renderColumn = (students: [string, StudentRequest][], columnStatus: "red" | "amber" | "green") => (
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <h4 style={{ margin: "0 0 12px 0", textTransform: "capitalize" }}>{columnStatus}</h4>
+        {students.length === 0 ? (
+          <p style={{ opacity: 0.6, fontSize: 13 }}>No students</p>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {students.map(([studentUid, r]) => (
+              <div
+                key={studentUid}
+                onClick={() => toggleNote(studentUid)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") toggleNote(studentUid);
+                }}
+                style={{
+                  border: "1px solid #ddd",
+                  borderRadius: 10,
+                  cursor: "pointer",
+                  padding: 12,
+                  ...statusStyles(r.status),
+                }}
+              >
+                <div style={{ fontSize: 16, fontWeight: 600 }}>{r.studentName || "Unnamed student"}</div>
+                <div style={{ opacity: 0.8, fontSize: 13 }}>{r.studentEmail || "No email available"}</div>
+                {expandedNotes[studentUid] && r.note ? (
+                  <div style={{ marginTop: 8, fontSize: 13 }}>
+                    <strong>Note:</strong> {r.note}
+                  </div>
+                ) : null}
+                <div style={{ marginTop: 8, opacity: 0.7, fontSize: 11 }}>
+                  {new Date(r.statusUpdatedAt).toLocaleTimeString()}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
 
     return (
-      <div style={{ maxWidth: 980, margin: "40px auto", textAlign: "left" }}>
+      <div style={{ maxWidth: 1400, margin: "40px auto", textAlign: "left" }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "center" }}>
           <div>
             <h2>Teacher Dashboard</h2>
@@ -358,47 +402,13 @@ export default function App() {
         <hr />
 
         <h3>Live requests</h3>
-        {entries.length === 0 ? (
+        {redStudents.length === 0 && amberStudents.length === 0 && greenStudents.length === 0 ? (
           <p>No students currently connected.</p>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
-            {entries.map(([studentUid, r]) => (
-              <div
-                key={studentUid}
-                onClick={() => toggleNote(studentUid)}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") toggleNote(studentUid);
-                }}
-                style={{
-                  border: "1px solid #ddd",
-                  borderRadius: 10,
-                  cursor: "pointer",
-                  padding: 12,
-                  ...statusStyles(r.status),
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                  <div>
-                    <div style={{ fontSize: 18, fontWeight: 600 }}>{r.studentName || "Unnamed student"}</div>
-                    <div style={{ opacity: 0.8 }}>{r.studentEmail || "No email available"}</div>
-                  </div>
-                  <div style={{ fontWeight: 700 }}>{statusLabel(r.status)}</div>
-                  <div style={{ marginTop: 6, opacity: 0.7, fontSize: 12 }}>
-                    Click to {expandedNotes[studentUid] ? "hide" : "view"} note
-                  </div>
-                </div>
-                {expandedNotes[studentUid] && r.note ? (
-                  <div style={{ marginTop: 8 }}>
-                    <strong>Note:</strong> {r.note}
-                  </div>
-                ) : null}
-                <div style={{ marginTop: 8, opacity: 0.7, fontSize: 12 }}>
-                  Updated: {new Date(r.statusUpdatedAt).toLocaleTimeString()}
-                </div>
-              </div>
-            ))}
+          <div style={{ display: "flex", gap: 16 }}>
+            {renderColumn(redStudents, "red")}
+            {renderColumn(amberStudents, "amber")}
+            {renderColumn(greenStudents, "green")}
           </div>
         )}
       </div>
